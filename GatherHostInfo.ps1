@@ -1,6 +1,6 @@
-﻿param (
-    [switch]$WithLocalCreds = $false
-)
+﻿#param (
+#    [switch]$WithLocalCreds = $false
+#)
 <# 
 *******************************************************************************************************************
 Authored Date:    Sept 2016
@@ -11,16 +11,22 @@ Purpose of Script:
    Gathers and documents important information that may be required
    during the upgrade of an ESXi Host.  This includes:
     - VMs running on the host
-    - VM IPConfig info     
+    - VM IPConfig info
+    - Share Info
+    - Print Queue Info
+    - VM Configuration Info     
     - Host Annotations
     - VM Annotations
 
-   Prompted inputs:  CRQ, vCenterName, VMHostName
+   Prompted inputs:  vCenterName, VMHostName
 
    Outputs:          
             $USERPROFILE$\Documents\HostUpgradeInfo\$VMHost\server.txt
             $USERPROFILE$\Documents\HostUpgradeInfo\$VMHost\$HostName.docx
             $USERPROFILE$\Documents\HostUpgradeInfo\$VMHost\IPConfig\$VMName-ipconfig.txt [Multiple Files]
+            $USERPROFILE$\Documents\HostUpgradeInfo\$VMHost\PrinterInfo\$VMName-PrinterInfo.txt [Multiple Files]
+            $USERPROFILE$\Documents\HostUpgradeInfo\$VMHost\ShareInfo\$VMName-sharelist.txt [as well as .reg files]
+            $USERPROFILE$\Documents\HostUpgradeInfo\$VMHost\VMInfo\$VMName-VMInfo.txt [Multiple Files]
             $USERPROFILE$\Documents\HostUpgradeInfo\$VMHost\Annotations\VMAnnotations-<HostName>.csv
             $USERPROFILE$\Documents\HostUpgradeInfo\$VMHost\Annotations\VMHost-<HostName>.csv
             $USERPROFILE$\Documents\HostUpgradeInfo\GatherHostInfoLog.txt
@@ -54,6 +60,22 @@ Update Feb 7th, 2017
       GatherHostInfo.ps1 -WithLocalCreds
 -----------------------------------------------------------------------------
 -----------------------------------------------------------------------------
+Update March 7th, 2017
+   Author:    Graham Jensen
+   Description of Change:
+      Add additional information gathering
+      - If File Server, collects Share Listing and exports LanmanServer
+        Registry entries
+      - Detailed VM Virtual Hardware Configuration
+      - If Print Server, collects PrintQueue and Driver Info
+      - Code is present to enable backup of PrintQueues with PrintBRM
+        however still having some issues with PSRemoting enablement so 
+        currently this functionality is disabled.
+      - WithLocalCreds switch no longer required for Courts vm enumeration
+        script now automatically detects failed attempt and then prompts 
+        for additional creds if required.
+-----------------------------------------------------------------------------
+-----------------------------------------------------------------------------
 Update <Date>
    Author:    <Name>
    Description of Change:
@@ -78,6 +100,11 @@ if ( !(Get-Module -Name VMware.VimAutomation.Core -ErrorAction SilentlyContinue)
 }
 $ErrorActionPreference="Continue"
 
+#*************************
+# Load BitsTransfer Module
+#*************************
+Import-Module BitsTransfer
+
 
 # -----------------------
 # Define Global Variables
@@ -90,6 +117,8 @@ $Global:RunDate = Get-Date
 $Global:RunAgain = $null
 $Global:Creds = $null
 $Global:CredsLocal = $null
+$Global:FileServer = $null
+$Global:PrintServer = $null
 
 #*****************
 # Get VC from User
@@ -125,6 +154,9 @@ Function Verify-Folders {
         New-Item $Global:WorkFolder -type Directory
         New-Item "$Global:WorkFolder\Annotations" -type Directory
         New-Item "$Global:WorkFolder\IPConfig" -type Directory
+        New-Item "$Global:WorkFolder\ShareInfo" -type Directory
+        New-Item "$Global:WorkFolder\VMInfo" -type Directory
+        New-Item "$Global:WorkFolder\PrinterInfo" -type Directory
         }
     " "
     "Folder Structure built" 
@@ -133,14 +165,35 @@ Function Verify-Folders {
 # EndFunction Verify-Folders
 #***************************
 
+#*******************
+# Connect to vCenter
+#*******************
+Function Connect-VC {
+    "-----------------------------------------"
+    "Connecting to $Global:VCName"
+    Connect-VIServer $Global:VCName -Credential $Global:Creds > $null
+}
+#***********************
+# EndFunction Connect-VC
+#***********************
+
+#*******************
+# Disconnect vCenter
+#*******************
+Function Disconnect-VC {
+    "Disconnecting $Global:VCName"
+    "-----------------------------------------"
+    Disconnect-VIServer -Server $Global:VCName -Confirm:$false
+}
+#**************************
+# EndFunction Disconnect-VC
+#**************************
+
+
 #*********************
 # Get Host Information
 #*********************
 Function Get-HostInfo {
-    #Connect to VC using input from above
-    "-----------------------------------------"
-    "Connecting to $Global:VCName"
-    Connect-VIServer $Global:VCName -Credential $Global:Creds > $null
 
     # Extract Host Annotations and write them to CSV file
     "Writing Host Annotations to VMHost-$Global:HostName.csv" 
@@ -170,11 +223,6 @@ Function Get-HostInfo {
         }
     } | Export-Csv -Path $Global:WorkFolder\Annotations\VMAnnotations-$Global:HostName.csv -NoTypeInformation
 
-    #Disconnect from VC
-    "Disconnecting $Global:VCName"
-    "-----------------------------------------"
-    Disconnect-VIServer -Server $Global:VCName -Confirm:$false
-
     #Create Server.txt file for input to next script
     Import-csv -Path $Global:WorkFolder\Annotations\VMAnnotations-$Global:HostName.csv | Select VM | Format-Table -HideTableHeaders | Out-File $Global:WorkFolder\VMList-temp.txt 
     (Get-Content $Global:WorkFolder\VMList-temp.txt)| Foreach {$_.TrimEnd()} | ? {$_.trim() -ne "" } | Sort-Object | Get-Unique |Out-File $Global:WorkFolder\server.txt
@@ -184,50 +232,57 @@ Function Get-HostInfo {
 # EndFunction Get-HostInfo
 #*************************
 
+#**********************************
+# Determine Server Roles With Local
+#**********************************
+Function DetermineServerRoles($s) {
+    $Global:FileServer = $null
+    $Global:PrintServer = $null
+    "Checking for server roles on $s"
+    $shrQuery ="select Name, Path, Description from Win32_share where NAME != 'print$' AND Name != 'prnproc$' AND Type =0"
+    $shr=get-wmiobject  -computer $s -query $shrQuery -Credential $Global:CredsLocal  -ErrorAction SilentlyContinue
+    $numshr = $shr.length
+
+    if($numshr -gt 0){
+        $Global:FileServer = $True
+        }
+        
+    $prn = @(get-wmiobject win32_printer -computer $s -Credential $Global:CredsLocal  -ErrorAction SilentlyContinue | where {$_.Shared -eq $TRUE})
+    $numprn = $prn.length
+
+    if($numprn -gt 0){
+        $Global:PrintServer = $True    
+        }
+
+}
+#*********************************
+# EndFunction DetermineServerRoles
+#*********************************
+
 #*****************
 # Get VM IPConfigs
 #*****************
-Function Get-IPConfigs {
+Function Get-IPConfigs($s) {
     $SavePath = "$Global:WorkFolder\IPConfig"
-    $servers = Get-Content "$Global:WorkFolder\server.txt"
+    $ErrorActionPreference="SilentlyContinue"
+    "Running IPConfig on $s"
+    $result = invoke-wmimethod -computer $s -path Win32_process -name Create -ArgumentList "cmd /c ipconfig /all > c:\temp\$s-ipconfig.txt" -Credential $Global:CredsLocal 
+    switch ($result.returnvalue) {
+        0 {"$s Successful Completion."}
+        2 {"$s Access Denied."}
+        3 {"$s Insufficient Privilege."}
+        8 {"$s Unknown failure."}
+        9 {"$s Path Not Found."}
+        21 {"$s Invalid Parameter."}
+        default {"$s Could not be determined."}
+        }
+    sleep 2
+    if ($result.returnvalue -ne 0){
+        "Was not able to connect to $s"
+        "Please supply alternate credentials!!!"
+        $Global:CredsLocal = Get-Credential
 
-    forEach ($s in $servers) {
-        "Running IPConfig on $s"
-        $result = invoke-wmimethod -computer $s -path Win32_process -name Create -ArgumentList "cmd /c ipconfig /all > c:\temp\$s-ipconfig.txt" -Credential $Global:Creds
-        switch ($result.returnvalue) {
-            0 {"$s Successful Completion."}
-            2 {"$s Access Denied."}
-            3 {"$s Insufficient Privilege."}
-            8 {"$s Unknown failure."}
-            9 {"$s Path Not Found."}
-            21 {"$s Invalid Parameter."}
-            default {"$s Could not be determined."}
-            }
-        sleep 2
-        if ($result.returnvalue -eq 0) {
-            "Connecting to C$ on $s"
-            New-PSDrive REMOTE -PSProvider FileSystem -Root \\$s\c$\temp -Credential $Global:Creds > $null 
-            "Moving $s-ipconfig.txt to local machine"
-            move-item -path REMOTE:\$s-ipconfig.txt $SavePath -force
-            "Disconnect $s" 
-            Remove-PSDrive REMOTE
-            }
-    "-----------------------------------------"
-    }
-}
-#**************************
-# EndFunction Get-IPConfigs
-#**************************
-
-#**************************
-# Get VM IPConfigsWithLocal
-#**************************
-Function Get-IPConfigsWithLocal {
-    $SavePath = "$Global:WorkFolder\IPConfig"
-    $servers = Get-Content "$Global:WorkFolder\server.txt"
-
-    forEach ($s in $servers) {
-        "Running IPConfig on $s"
+        #Retry with new credentials
         $result = invoke-wmimethod -computer $s -path Win32_process -name Create -ArgumentList "cmd /c ipconfig /all > c:\temp\$s-ipconfig.txt" -Credential $Global:CredsLocal
         switch ($result.returnvalue) {
             0 {"$s Successful Completion."}
@@ -238,22 +293,221 @@ Function Get-IPConfigsWithLocal {
             21 {"$s Invalid Parameter."}
             default {"$s Could not be determined."}
             }
-        sleep 2
-        if ($result.returnvalue -eq 0) {
-            "Connecting to C$ on $s"
-            New-PSDrive REMOTE -PSProvider FileSystem -Root \\$s\c$\temp -Credential $Global:CredsLocal > $null 
-            "Moving $s-ipconfig.txt to local machine"
-            move-item -path REMOTE:\$s-ipconfig.txt $SavePath -force
-            "Disconnect $s" 
-            Remove-PSDrive REMOTE
-            }
+    
+        }
+    if ($result.returnvalue -eq 0) {
+        "Connecting to C$ on $s"
+        New-PSDrive REMOTE -PSProvider FileSystem -Root \\$s\c$\temp -Credential $Global:CredsLocal > $null 
+        "Moving $s-ipconfig.txt to local machine"
+        move-item -path REMOTE:\$s-ipconfig.txt $SavePath -force
+        "Disconnect $s" 
+        Remove-PSDrive REMOTE
+        net use \\$s\c$\temp /d
+        }
+        Else {
+            "Not able to connect to $s to retrieve IPConfig"
+            "You will need to manually gather this information"
+            Read-Host -Prompt "Press <Enter> to continue" 
+        }
     "-----------------------------------------"
-    }
+    $ErrorActionPreference="Continue"
 }
 #**************************
 # EndFunction Get-IPConfigs
 #**************************
 
+#*************************
+# Get VM Share Information
+#*************************
+Function Get-ShareInfo($s) {
+    $SavePath = "$Global:WorkFolder\ShareInfo"
+ 
+    "Gathering Share Info on $s"
+    $result = Invoke-WmiMethod -computer $s -path Win32_Process -name Create -ArgumentList "cmd /c net share > c:\temp\$s-sharelist.txt" -Credential $Global:CredsLocal
+    switch ($result.returnvalue) {
+        0 {"$s Successful Completion."}
+        2 {"$s Access Denied."}
+        3 {"$s Insufficient Privilege."}
+        8 {"$s Unknown failure."}
+        9 {"$s Path Not Found."}
+        21 {"$s Invalid Parameter."}
+        default {"$s Could not be determined."}
+        }
+    "Extract Shares from registry on $s"
+    $result = Invoke-WmiMethod -computer $s -path Win32_Process -name Create -ArgumentList "cmd /c reg export HKLM\SYSTEM\CurrentControlSet\Services\LanmanServer\Shares c:\temp\$s-shares.reg" -Credential $Global:CredsLocal
+    switch ($result.returnvalue) {
+        0 {"$s Successful Completion."}
+        2 {"$s Access Denied."}
+        3 {"$s Insufficient Privilege."}
+        8 {"$s Unknown failure."}
+        9 {"$s Path Not Found."}
+        21 {"$s Invalid Parameter."}
+        default {"$s Could not be determined."}
+        }
+    "Extract Share Security from registry on $s"
+    $result = Invoke-WmiMethod -computer $s -path Win32_Process -name Create -ArgumentList "cmd /c reg export HKLM\SYSTEM\CurrentControlSet\Services\LanmanServer\Shares\Security c:\temp\$s-security.reg" -Credential $Global:CredsLocal
+    switch ($result.returnvalue) {
+        0 {"$s Successful Completion."}
+        2 {"$s Access Denied."}
+        3 {"$s Insufficient Privilege."}
+        8 {"$s Unknown failure."}
+        9 {"$s Path Not Found."}
+        21 {"$s Invalid Parameter."}
+        default {"$s Could not be determined."}
+        }
+    sleep 3
+    if ($result.returnvalue -eq 0) {
+        "Connecting to C$ on $s"
+        New-PSDrive REMOTE -PSProvider FileSystem -Root \\$s\c$\temp -Credential $Global:CredsLocal > $null 
+        "Moving $s-sharelist.txt to local machine"
+        move-item -path REMOTE:\$s-sharelist.txt $SavePath -force
+        "Moving $s Registry files to local machine"
+        move-item -path REMOTE:\$s-*.reg $SavePath -force
+        "Disconnect $s" 
+        Remove-PSDrive REMOTE
+        net use \\$s\c$\temp /d
+        }
+"-----------------------------------------"
+    
+}
+#**************************
+# EndFunction Get-ShareInfo
+#**************************
+
+#****************************
+# Check for PSRemoting Status
+#****************************
+Function PSRemotingStatus ($s) {
+    $PSRemotingEnabled = [bool](Test-WSMan -Computer $s -ErrorAction SilentlyContinue)
+
+    If ($PSRemotingEnabled -eq $false){
+        "PSRemoting being enabled on $s"
+        $username = $Global:CredsLocal.Username
+        #unencrypting $credsLocal.Password so that we can send it to PSExec
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Global:CredsLocal.Password)
+        $pass = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        .\PSExec.exe \\$s -u $username -p $pass powershell enable-psremoting -force
+        #Clear unencrypted password from memory
+        $pass = $null
+        $PSRemotingEnabled = [bool](Test-WSMan -Computer $s -ErrorAction SilentlyContinue)
+        If ($PSRemotingEnabled -eq $false){
+            "PSRemoting was not successfully enabled on $s"
+            $returnValue = $False
+            }
+            Else {
+               "PSRemoting is now enabled on $s"
+               $returnValue = $True
+               } 
+        }
+    Else {
+        "PSRemoting is enabled on $s"
+        $returnValue = $True
+    }
+    return ,$returnValue
+}
+#*****************************
+# EndFunction PSRemotingStatus
+#*****************************
+
+#*********************************
+# Backup PrintQueues with Printbrm
+#*********************************
+Function Get-PrintQueues($s){
+    $SavePath = "$Global:WorkFolder\PrinterInfo"
+
+    "Gathering Print Queue Info on $s"
+    $driverQuery ="select Name, Version, SupportedPlatform, DriverPath, OEMUrl from Win32_printerdriver"
+    $prnQuery ="select * from Win32_printer where NAME != 'Microsoft XPS Document Writer'";
+    $prn = get-wmiobject -computer $s  -query $prnQuery -Credential $Global:CredsLocal
+
+    "$s PrinterInfo" | Out-File -FilePath $SavePath\$s-PrinterInfo.txt
+    "===========================" | Out-File -FilePath $SavePath\$s-PrinterInfo.txt -append
+
+    foreach($printer in $prn){
+        "ShareName:`t" + $printer.ShareName | Out-File -FilePath $SavePath\$s-PrinterInfo.txt -append
+        "DriverName:`t" + $printer.driverName | Out-File -FilePath $SavePath\$s-PrinterInfo.txt -append
+        "Location:`t" + $printer.location | Out-File -FilePath $SavePath\$s-PrinterInfo.txt -append
+        "Description:`t" + $printer.description | Out-File -FilePath $SavePath\$s-PrinterInfo.txt -append
+        #$printer.SystemName
+        $port = $printer.PortName
+        $ipTCPport =get-wmiobject -class win32_tcpIPprinterPort -computer $server -Credential $Global:CredsLocal | where-object{$_.Name -eq $port}
+        "PrinterIP:`t" + $ipTCPport.HostAddress | Out-File -FilePath $SavePath\$s-PrinterInfo.txt -append
+        "-----------------------------" | Out-File -FilePath $SavePath\$s-PrinterInfo.txt -append
+        }
+    
+    " " | Out-File -FilePath $SavePath\$s-PrinterInfo.txt -append
+    "Print Drivers" | Out-File -FilePath $SavePath\$s-PrinterInfo.txt -append
+    "=============" | Out-File -FilePath $SavePath\$s-PrinterInfo.txt -append    
+    $result = get-wmiobject  -computer $s  -query $DriverQuery -Credential $Global:CredsLocal
+    foreach($config in $result){
+        $Dname = $config.Name
+        $Durl  = $config.OEMURL
+        $s+","+ $Dname+","+$Durl | Out-File -FilePath $SavePath\$s-PrinterInfo.txt -append   
+        }
+
+ <#   "Backing up Print Queues on $s"
+    "-----------------------------"
+    If ((PSRemotingStatus $s) -eq $True){
+        $command = { C:\Windows\System32\spool\tools\printbrm -B -F c:\temp\prnbackup.printerexport -o force  }
+        "Running printbrm on $s"
+        Invoke-Command -Computer $s -ScriptBlock $command -Credential $Global:CredsLocal
+        "Getting Printer backup file from $s to $SavePath\$s-prnbackup.printerexport"
+        New-PSDrive REMOTE -PSProvider FileSystem -Root \\$s\c$\temp -Credential $Global:CredsLocal > $null
+        Start-BitsTransfer -Source REMOTE:\prnbackup.printerexport -Destination $SavePath\$s-prnbackup.printerexport -Description "Transfer PrinterBackup file from $s" -DisplayName "PrinterBackup" -Credential $Global:CredsLocal
+        "Cleaning up Temp drive on $s"
+        Remove-item -path REMOTE:\prnbackup.printerexport -force
+        Remove-PSDrive REMOTE
+        net use \\$s\c$\temp /d        
+        }
+        Else {
+            "Unable to run PrintBRM on $server"  
+            "If Print Queue backup is required" 
+            "it will have to be done manually"
+            Read-Host -Prompt "Press <Enter> to continue" 
+            } #>
+}
+#****************************
+# EndFunction Get-PrintQueues
+#****************************
+
+#*********************
+# Gather VM Guest Info
+#*********************
+Function GetVMInfo($s) {
+    "Gathering VM Configuration Info"
+    $SavePath = "$Global:WorkFolder\VMInfo"
+
+    "Getting VM Config Info for $s"
+    $VMInfo = Get-VM $s
+    $VMGuest = Get-Vmguest $s
+    $VMScsi = Get-ScsiController $s
+    $VMInfo.Name | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt
+    "`n===============`n" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "`nVM Id:`t" + $VMInfo.ID | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "Folder: `t" + $VMInfo.Folder | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "PowerState:`t" + $VMInfo.PowerState | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "Guest OS:`t" + $VMGuest.OSFullName | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "Guest IP:`t" + $VMGuest.IPAddress | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "CPU(s):`t" + $VMInfo.NumCPU | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "Ram (MB):`t" + $VMInfo.MemoryMB | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    " " | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "SCSI Adapters" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "-------------" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    $VMScsi | Format-Table Name,Type,UnitNumber -AutoSize |Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    " " | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "Disk Configuration" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "------------------" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    $VMInfo.HardDisks | Format-Table Name,CapacityGB,CapacityKB,Filename -autosize -wrap | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    " " | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "Network Configuration" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    "---------------------" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    $VMInfo.NetworkAdapters | Format-Table Name,Type,NetworkName,MacAddress -AutoSize | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+
+    "-----------------------------------------"
+}
+#**********************
+# EndFunction GetVMInfo
+#**********************
 
 #********************
 # Build Word Document
@@ -261,6 +515,7 @@ Function Get-IPConfigsWithLocal {
 Function Build-Word {
     "Building Word Document"
     $wdOrientLandscape = 1
+    $wdOrientPortrait = 0
 
     $Word = New-Object -ComObject Word.Application
     $Word.Visible = $True
@@ -293,11 +548,23 @@ Function Build-Word {
     $Selection.TypeParagraph()
     $Selection.InsertFile("$Global:WorkFolder\server.txt")
     $Selection.InsertNewPage()
+    
+    #Add VMInfo Files
+    $Selection.Style="Strong"
+    $Selection.TypeText("VM Configurations")
+    $Selection.TypeParagraph()
+    Get-ChildItem "$Global:WorkFolder\VMInfo" |
+    ForEach-Object{
+        $Selection.InsertFile("$Global:WorkFolder\VMInfo\$_")
+        $Selection.TypeParagraph()
+        $Selection.TypeText("-------------------")
+        $Selection.InsertNewPage()  
+        }
+    
+    #Add IPConfig Files
     $Selection.Style="Strong"
     $Selection.TypeText("IP Configurations")
     $Selection.TypeParagraph()
-
-    #Add IPConfig Files
     Get-ChildItem "$Global:WorkFolder\IPConfig" |
     ForEach-Object{
         $Selection.InsertFile("$Global:WorkFolder\IPConfig\$_")
@@ -305,6 +572,37 @@ Function Build-Word {
         $Selection.TypeText("-------------------")
         $Selection.InsertNewPage()  
         }
+
+    #Add ShareListings
+    $Selection.Style="Strong"
+    $Selection.TypeText("Share Listings")
+    $Selection.TypeParagraph()
+    Get-ChildItem "$Global:WorkFolder\ShareInfo" |
+    ForEach-Object{
+        If ($_ -like "*.txt"){
+        $Selection.TypeText("$_")
+        $Selection.InsertFile("$Global:WorkFolder\ShareInfo\$_")
+        $Selection.TypeParagraph()
+        $Selection.TypeText("-------------------")
+        $Selection.InsertNewPage()       
+        }
+    }
+
+    #Add PrinterListings
+    $Selection.Style="Strong"
+    $Selection.TypeText("Printer Info")
+    $Selection.TypeParagraph()
+    Get-ChildItem "$Global:WorkFolder\PrinterInfo" |
+    ForEach-Object{
+        If ($_ -like "*.txt"){
+        $Selection.TypeText("$_")
+        $Selection.TypeParagraph()
+        $Selection.InsertFile("$Global:WorkFolder\PrinterInfo\$_")
+        $Selection.TypeParagraph()
+        $Selection.TypeText("-------------------")
+        $Selection.InsertNewPage()       
+        }
+    }
 
     #Add Annotation Files
     $Selection.Style="Strong"
@@ -325,6 +623,10 @@ Function Build-Word {
     "Word Doc built and saved to $FileName"
     "********************************"
 }
+#**********************
+# EndFuntion Build-Word
+#**********************
+
 
 #*************************
 # Prompt for Running Again
@@ -351,7 +653,6 @@ Function Clean-Up {
     $Global:CredsLocal = $null
 }
 
-
 #***************
 # Execute Script
 #***************
@@ -363,13 +664,10 @@ Start-Transcript -path $Global:Folder\GatherHostInfoLog.txt
 "================================================="
 " "
 $Global:Creds = Get-Credential
-if ($WithLocalCreds) {
-        "Enter local credentials to pull IP Info"
-        "I.E:  localhost\rhsadmin"
-        $Global:CredsLocal = Get-Credential
-        }
+$Global:CredsLocal = $Global:Creds
 CLS
 Get-VCenter
+Connect-VC
 $Global:RunAgain = "y"
 Do {
     Get-HostName
@@ -378,22 +676,26 @@ Do {
     Verify-Folders
     Get-HostInfo
     
-    if ($WithLocalCreds) {
-        Get-IPConfigsWithLocal
+    $servers = Get-Content "$Global:WorkFolder\server.txt"
+    forEach ($server in $servers) {
+        Get-IPConfigs $server
+        
+        DetermineServerRoles $server
+        If ($Global:FileServer -eq $True){
+            "$server is a File Server - Gathering Share Info"
+            Get-ShareInfo $server
+            }
+        If ($Global:PrintServer -eq $True){
+            "$Server is a Print Server - Backing up Print Queues"
+            Get-PrintQueues $server
+            }
+        GetVMInfo $server
         }
-    Else {
-        Get-IPConfigs
-        }
-
     Build-Word
-    "Data Collection for $Global:HostName is complete!"
-    "================================================="
-    " "
     Run-Again
     } While ($Global:RunAgain -eq "y")
-
+Disconnect-VC
 "Open Explorer to $Global:Folder"
 Invoke-Item $Global:Folder
 Clean-Up
 Stop-Transcript
-
