@@ -79,6 +79,7 @@ Update March 21st, 2017
       powered on logs state and discontinues additional checks for that VM.  
       If GuestID is not 'Like' "Win*" then log and discontinue additional
       checks for that VM
+    - Cleaned up some the Host and log output
 -----------------------------------------------------------------------------
 
 ******************************************************************************************

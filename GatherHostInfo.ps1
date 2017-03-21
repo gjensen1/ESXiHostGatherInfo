@@ -86,6 +86,7 @@ Update March 21st, 2017
       powered on logs state and discontinues additional checks for that VM.  
       If GuestID is not 'Like' "Win*" then log and discontinue additional
       checks for that VM
+    - Cleaned up some the Host and log output
 -----------------------------------------------------------------------------
 -----------------------------------------------------------------------------
 Update <Date>
@@ -170,7 +171,6 @@ Function Verify-Folders {
         New-Item "$Global:WorkFolder\VMInfo" -type Directory
         New-Item "$Global:WorkFolder\PrinterInfo" -type Directory
         }
-    " "
     "Folder Structure built" 
 }
 #***************************
@@ -181,7 +181,6 @@ Function Verify-Folders {
 # Connect to vCenter
 #*******************
 Function Connect-VC {
-    "-----------------------------------------"
     "Connecting to $Global:VCName"
     Connect-VIServer $Global:VCName -Credential $Global:Creds > $null
 }
@@ -194,7 +193,6 @@ Function Connect-VC {
 #*******************
 Function Disconnect-VC {
     "Disconnecting $Global:VCName"
-    "-----------------------------------------"
     Disconnect-VIServer -Server $Global:VCName -Confirm:$false
 }
 #**************************
@@ -244,9 +242,9 @@ Function Get-HostInfo {
 # EndFunction Get-HostInfo
 #*************************
 
-#**********************************
-# Determine Server Roles With Local
-#**********************************
+#***********************
+# Determine Server Roles
+#***********************
 Function DetermineServerRoles($s) {
     $Global:FileServer = $null
     $Global:PrintServer = $null
@@ -290,9 +288,9 @@ Function Get-IPConfigs($s) {
         }
     sleep 2
     if ($result.returnvalue -ne 0){
-        "Was not able to connect to $s"
-        "Please supply alternate credentials!!!"
-        $Global:CredsLocal = Get-Credential
+        Write-Host "Was not able to connect to $s" -ForegroundColor Red
+        Write-Host "Please supply alternate credentials!!!" -ForegroundColor Red
+        $Global:CredsLocal = Get-Credential -Credential $null
 
         #Retry with new credentials
         $result = invoke-wmimethod -computer $s -path Win32_process -name Create -ArgumentList "cmd /c ipconfig /all > c:\temp\$s-ipconfig.txt" -Credential $Global:CredsLocal
@@ -314,14 +312,13 @@ Function Get-IPConfigs($s) {
         move-item -path REMOTE:\$s-ipconfig.txt $SavePath -force
         "Disconnect $s" 
         Remove-PSDrive REMOTE
-        net use \\$s\c$\temp /d
+        net use \\$s\c$\temp /d > $null
         }
         Else {
             "Not able to connect to $s to retrieve IPConfig"
             "You will need to manually gather this information"
             Read-Host -Prompt "Press <Enter> to continue" 
         }
-    "-----------------------------------------"
     $ErrorActionPreference="Continue"
 }
 #**************************
@@ -377,10 +374,8 @@ Function Get-ShareInfo($s) {
         move-item -path REMOTE:\$s-*.reg $SavePath -force
         "Disconnect $s" 
         Remove-PSDrive REMOTE
-        net use \\$s\c$\temp /d
+        net use \\$s\c$\temp /d > $null
         }
-"-----------------------------------------"
-    
 }
 #**************************
 # EndFunction Get-ShareInfo
@@ -529,8 +524,6 @@ Function GetVMInfo($s) {
     "Network Configuration" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
     "---------------------" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
     $VMNetwork | Format-Table Name,Type,NetworkName,MacAddress -AutoSize | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
-
-    "-----------------------------------------"
 }
 #**********************
 # EndFunction GetVMInfo
@@ -690,19 +683,23 @@ $ErrorActionPreference="Continue"
 Start-Transcript -path $Global:Folder\GatherHostInfoLog.txt
 "================================================="
 " "
-$Global:Creds = Get-Credential
+Write-Host "Get CIHS credentials" -ForegroundColor Yellow
+
+$Global:Creds = Get-Credential -Credential $null
 $Global:CredsLocal = $Global:Creds
 CLS
 Get-VCenter
 Connect-VC
+"-------------------------------------------------"
 $Global:RunAgain = "y"
 Do {
     Get-HostName
     CLS
     $Global:WorkFolder = "$Global:Folder\$Global:HostName"
     Verify-Folders
+    "-------------------------------------------------"  
     Get-HostInfo
-    
+    "-------------------------------------------------"
     $servers = Get-Content "$Global:WorkFolder\server.txt"
     forEach ($server in $servers) {
         GetVMInfo $server
@@ -721,13 +718,14 @@ Do {
                     }
                 }
                 Else {
-                    "VM $Server is not Windows, skipping additional steps"
+                    Write-Host "VM $Server is not Windows, skipping additional steps" -ForegroundColor Yellow
                     }
 
             }
             Else {
-                "VM $Server is not Powered On skipping additional steps "
+                Write-Host "VM $Server is not Powered On skipping additional steps " -ForegroundColor Yellow
             }
+        "-------------------------------------------------"
         }
     Build-Word
     Run-Again
