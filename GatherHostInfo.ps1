@@ -76,6 +76,18 @@ Update March 7th, 2017
         for additional creds if required.
 -----------------------------------------------------------------------------
 -----------------------------------------------------------------------------
+Update March 21st, 2017
+   Author:    Graham Jensen
+   Description of Change:
+    - Modified the GetVMInfo function to remove dependency on depricated
+      Get-VM functionality for Disk Info and NetworkAdapter Info.  Changed
+      code to use new Get-Harddisk, and Get-NetworkAdapter PowerCLI cmdlets
+    - Add functionality to check for VM PowerState and GuestID.  If VM is not
+      powered on logs state and discontinues additional checks for that VM.  
+      If GuestID is not 'Like' "Win*" then log and discontinue additional
+      checks for that VM
+-----------------------------------------------------------------------------
+-----------------------------------------------------------------------------
 Update <Date>
    Author:    <Name>
    Description of Change:
@@ -474,13 +486,28 @@ Function Get-PrintQueues($s){
 # Gather VM Guest Info
 #*********************
 Function GetVMInfo($s) {
-    "Gathering VM Configuration Info"
+    #"Gathering VM Configuration Info"
     $SavePath = "$Global:WorkFolder\VMInfo"
+    #Reset Global Switches
+    $Global:PoweredOn = $Null
+    $Global:IsWindows = $Null
 
     "Getting VM Config Info for $s"
     $VMInfo = Get-VM $s
     $VMGuest = Get-Vmguest $s
     $VMScsi = Get-ScsiController $s
+    $VMDisk = Get-HardDisk $s
+    $VMNetwork = Get-NetworkAdapter $s
+
+    If ($VMinfo.PowerState -eq "PoweredOn"){
+        $Global:PoweredOn = $True
+        }
+
+    If ($VMInfo.GuestId -like "Win*"){
+        $Global:IsWindows = $True
+        }
+
+    #Write Info to Text Files
     $VMInfo.Name | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt
     "`n===============`n" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
     "`nVM Id:`t" + $VMInfo.ID | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
@@ -497,11 +524,11 @@ Function GetVMInfo($s) {
     " " | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
     "Disk Configuration" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
     "------------------" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
-    $VMInfo.HardDisks | Format-Table Name,CapacityGB,CapacityKB,Filename -autosize -wrap | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    $VMDisk | Format-Table Name,CapacityGB,CapacityKB,Filename -autosize -wrap | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
     " " | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
     "Network Configuration" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
     "---------------------" | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
-    $VMInfo.NetworkAdapters | Format-Table Name,Type,NetworkName,MacAddress -AutoSize | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
+    $VMNetwork | Format-Table Name,Type,NetworkName,MacAddress -AutoSize | Out-File -FilePath $Global:WorkFolder\VMInfo\$s-VMInfo.txt -append
 
     "-----------------------------------------"
 }
@@ -678,18 +705,29 @@ Do {
     
     $servers = Get-Content "$Global:WorkFolder\server.txt"
     forEach ($server in $servers) {
-        Get-IPConfigs $server
-        
-        DetermineServerRoles $server
-        If ($Global:FileServer -eq $True){
-            "$server is a File Server - Gathering Share Info"
-            Get-ShareInfo $server
-            }
-        If ($Global:PrintServer -eq $True){
-            "$Server is a Print Server - Backing up Print Queues"
-            Get-PrintQueues $server
-            }
         GetVMInfo $server
+
+        If ($Global:PoweredOn -eq $True){
+            If ($Global:IsWindows -eq $True){
+                Get-IPConfigs $server
+                DetermineServerRoles $server
+                If ($Global:FileServer -eq $True){
+                    "$server is a File Server - Gathering Share Info"
+                    Get-ShareInfo $server
+                    }
+                If ($Global:PrintServer -eq $True){
+                    "$Server is a Print Server - Backing up Print Queues"
+                    Get-PrintQueues $server
+                    }
+                }
+                Else {
+                    "VM $Server is not Windows, skipping additional steps"
+                    }
+
+            }
+            Else {
+                "VM $Server is not Powered On skipping additional steps "
+            }
         }
     Build-Word
     Run-Again
