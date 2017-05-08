@@ -6,8 +6,10 @@
 Authored Date:    Sept 2016
 Original Author:  Graham Jensen
 *******************************************************************************************************************
-Purpose of Script:
+.SYNOPSIS
+    Gathers and documents important information from an ESXi Host
 
+.DESCRIPTION
    Gathers and documents important information that may be required
    during the upgrade of an ESXi Host.  This includes:
     - VMs running on the host
@@ -31,6 +33,7 @@ Purpose of Script:
             $USERPROFILE$\Documents\HostUpgradeInfo\$VMHost\Annotations\VMHost-<HostName>.csv
             $USERPROFILE$\Documents\HostUpgradeInfo\GatherHostInfoLog.txt
 *******************************************************************************************************************  
+.NOTES
 Prerequisites:
 
     #1  This script uses the VMware modules installed by the installation of VMware PowerCLI
@@ -137,6 +140,8 @@ $Global:PrintServer = $null
 # Get VC from User
 #*****************
 Function Get-VCenter {
+    [CmdletBinding()]
+    Param()
     #Prompt User for vCenter
     Write-Host "Enter the FQHN of the vCenter that the host currently resides in: " -ForegroundColor "Yellow" -NoNewline
     $Global:VCName = Read-Host 
@@ -149,6 +154,8 @@ Function Get-VCenter {
 # Get HostName
 #*************
 Function Get-HostName {
+    [CmdletBinding()]
+    Param()
     #Prompt User for ESXi Host
     Write-Host "Enter the FQHN of the ESXi Host you want to collect data from: " -ForegroundColor "Yellow" -NoNewLine
     $Global:HostName = Read-Host
@@ -162,6 +169,8 @@ Function Get-HostName {
 # Check for Folder Structure if not present create
 #*************************************************
 Function Verify-Folders {
+    [CmdletBinding()]
+    Param()
     "Building Local folder structure" 
     If (!(Test-Path $Global:WorkFolder)) {
         New-Item $Global:WorkFolder -type Directory
@@ -181,6 +190,8 @@ Function Verify-Folders {
 # Connect to vCenter
 #*******************
 Function Connect-VC {
+    [CmdletBinding()]
+    Param()
     "Connecting to $Global:VCName"
     Connect-VIServer $Global:VCName -Credential $Global:Creds > $null
 }
@@ -192,6 +203,8 @@ Function Connect-VC {
 # Disconnect vCenter
 #*******************
 Function Disconnect-VC {
+    [CmdletBinding()]
+    Param()
     "Disconnecting $Global:VCName"
     Disconnect-VIServer -Server $Global:VCName -Confirm:$false
 }
@@ -204,7 +217,8 @@ Function Disconnect-VC {
 # Get Host Information
 #*********************
 Function Get-HostInfo {
-
+    [CmdletBinding()]
+    Param()
     # Extract Host Annotations and write them to CSV file
     "Writing Host Annotations to VMHost-$Global:HostName.csv" 
     Get-VMHost -Name $Global:HostName | ForEach-Object {
@@ -245,7 +259,9 @@ Function Get-HostInfo {
 #***********************
 # Determine Server Roles
 #***********************
-Function DetermineServerRoles($s) {
+Function DetermineServerRoles {
+    [CmdletBinding()]
+    Param($s)
     $Global:FileServer = $null
     $Global:PrintServer = $null
     "Checking for server roles on $s"
@@ -272,7 +288,9 @@ Function DetermineServerRoles($s) {
 #*****************
 # Get VM IPConfigs
 #*****************
-Function Get-IPConfigs($s) {
+Function Get-IPConfigs {
+    [CmdletBinding()]
+    Param($s)
     $SavePath = "$Global:WorkFolder\IPConfig"
     $ErrorActionPreference="SilentlyContinue"
     "Running IPConfig on $s"
@@ -328,7 +346,9 @@ Function Get-IPConfigs($s) {
 #*************************
 # Get VM Share Information
 #*************************
-Function Get-ShareInfo($s) {
+Function Get-ShareInfo {
+    [CmdletBinding()]
+    Param($s)
     $SavePath = "$Global:WorkFolder\ShareInfo"
  
     "Gathering Share Info on $s"
@@ -384,7 +404,9 @@ Function Get-ShareInfo($s) {
 #****************************
 # Check for PSRemoting Status
 #****************************
-Function PSRemotingStatus ($s) {
+Function PSRemotingStatus {
+    [CmdletBinding()]
+    Param($s)
     $PSRemotingEnabled = [bool](Test-WSMan -Computer $s -ErrorAction SilentlyContinue)
 
     If ($PSRemotingEnabled -eq $false){
@@ -419,7 +441,9 @@ Function PSRemotingStatus ($s) {
 #*********************************
 # Backup PrintQueues with Printbrm
 #*********************************
-Function Get-PrintQueues($s){
+Function Get-PrintQueues {
+    [CmdletBinding()]
+    Param($s)
     $SavePath = "$Global:WorkFolder\PrinterInfo"
 
     "Gathering Print Queue Info on $s"
@@ -480,7 +504,9 @@ Function Get-PrintQueues($s){
 #*********************
 # Gather VM Guest Info
 #*********************
-Function GetVMInfo($s) {
+Function GetVMInfo {
+    [CmdletBinding()]
+    Param($s)
     #"Gathering VM Configuration Info"
     $SavePath = "$Global:WorkFolder\VMInfo"
     #Reset Global Switches
@@ -533,6 +559,8 @@ Function GetVMInfo($s) {
 # Build Word Document
 #********************
 Function Build-Word {
+    [CmdletBinding()]
+    Param()
     "Building Word Document"
     $wdOrientLandscape = 1
     $wdOrientPortrait = 0
@@ -652,6 +680,8 @@ Function Build-Word {
 # Prompt for Running Again
 #*************************
 Function Run-Again {
+    [CmdletBinding()]
+    Param()
     Write-Host "Do you have another Host to collect " -ForeGroundColor "Yellow" -NoNewLine
     Write-Host "(y/n)" -ForeGroundColor "Red" -NoNewLine
     Write-Host ": " -ForeGroundColor "Yellow" -NoNewLine
@@ -664,6 +694,8 @@ Function Run-Again {
 # Clean Up after Run
 #*********************
 Function Clean-Up {
+    [CmdletBinding()]
+    Param()
     $Global:Folder = $null
     $Global:WorkFolder = $null
     $Global:VCName = $null

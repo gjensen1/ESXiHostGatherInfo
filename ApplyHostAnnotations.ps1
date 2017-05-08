@@ -67,6 +67,8 @@ $Global:Creds = $null
 # Get VC from User
 #*****************
 Function Get-VCenter {
+    [CmdletBinding()]
+    Param()
     #Prompt User for vCenter
     Write-Host "Enter the FQHN of the vCenter that the host currently resides in: " -ForegroundColor "Yellow" -NoNewline
     $Global:VCName = Read-Host 
@@ -79,6 +81,8 @@ Function Get-VCenter {
 # Get HostName
 #*************
 Function Get-HostName {
+    [CmdletBinding()]
+    Param()
     #Prompt User for ESXi Host
     Write-Host "Enter the FQHN of the ESXi Host you want to appy annotations to: " -ForegroundColor "Yellow" -NoNewLine
     $Global:HostName = Read-Host
@@ -91,6 +95,8 @@ Function Get-HostName {
 # Connect to vCenter
 #*******************
 Function Connect-vCenter {
+    [CmdletBinding()]
+    Param()
     "Connecting to $Global:VCName"
     Connect-VIServer $Global:VCName -Credential $Global:Creds > $null
 }
@@ -102,6 +108,8 @@ Function Connect-vCenter {
 # Disconnect vCenter
 #*******************
 Function Disconnect-vCenter {
+    [CmdletBinding()]
+    Param()
     "Disconnecting $Global:VCName"    
     Disconnect-VIServer -Server $Global:VCName -Confirm:$false
 }
@@ -114,7 +122,8 @@ Function Disconnect-vCenter {
 # Apply Annotations
 #******************
 Function Apply-Annotations {
-
+    [CmdletBinding()]
+    Param()
     #Import values for Host Annotations from CSV and apply to new VC
     Import-Csv -Path "$Global:WorkFolder\Annotations\VMHost-$Global:HostName.csv" | Where-Object {$_.Value} | ForEach-Object {
     Get-VMHOST $_.VM | Set-Annotation -CustomAttribute $_.Name -Value $_.Value
@@ -133,6 +142,8 @@ Function Apply-Annotations {
 # Prompt for Running Again
 #*************************
 Function Run-Again {
+    [CmdletBinding()]
+    Param()
     Write-Host "Do you have another Host to apply annotations to " -ForeGroundColor "Yellow" -NoNewLine
     Write-Host "(y/n)" -ForeGroundColor "Red" -NoNewLine
     Write-Host ": " -ForeGroundColor "Yellow" -NoNewLine
@@ -145,6 +156,8 @@ Function Run-Again {
 # Clean Up after Run
 #*********************
 Function Clean-Up {
+    [CmdletBinding()]
+    Param()
     $Global:Folder = $null
     $Global:WorkFolder = $null
     $Global:VCName = $null
