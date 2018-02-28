@@ -193,7 +193,7 @@ Function Connect-VC {
     [CmdletBinding()]
     Param()
     "Connecting to $Global:VCName"
-    Connect-VIServer $Global:VCName -Credential $Global:Creds > $null
+    Connect-VIServer $Global:VCName -Credential $Global:Creds -WarningAction SilentlyContinue
 }
 #***********************
 # EndFunction Connect-VC
