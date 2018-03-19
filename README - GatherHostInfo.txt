@@ -30,10 +30,10 @@ Prerequisites:
         ENSURE that VMware PowerCLI has been installed.  
     
         Installation media can be found here: 
-        \\cihs.ad.gov.on.ca\tbs\Groups\ITS\DCO\RHS\RHS\Software\VMware
+        https://my.vmware.com
 
-    #2  To complete necessary tasks this script will require C3 account priviledges
-        you will be prompted for your C3 account and password.  The Get-Credential method
+    #2  To complete necessary tasks this script will require Administrator account priviledges
+        you will be prompted for your administrator account and password.  The Get-Credential method
         is used for this, so credentials are maintained securely.
 
 ===================================================================================================================
@@ -87,8 +87,6 @@ Update March 21st, 2017
 ** This script uses the VMware modules installed by the installation of VMware PowerCLI **
 **               ENSURE that VMware PowerCLI has been installed.                        **
 **                                                                                      **    
-**    Installation media can be found here:                                             **
-**    \\cihs.ad.gov.on.ca\tbs\Groups\ITS\DCO\RHS\RHS\Software\VMware\VMware PowerCLI    **
 **                                                                                      **
 **          ======================================================                      **
 **	    Version 5.8 is the version used to develop this script                      **
